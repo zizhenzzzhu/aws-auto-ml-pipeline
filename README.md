@@ -30,6 +30,70 @@ queries/                     Local SQL files, ignored by git
 IAM controls who can do what at each stage. CloudWatch observes stage logs,
 metrics, alarms, and dashboards.
 
+## Demo Run
+
+The screenshots below show a complete end-to-end simulation produced by `bash ml.sh`.
+The pipeline runs against a 3.2M-row Snowflake fraud-transaction dataset with 412 raw
+columns and trains an XGBoost model.
+
+### Pre-flight — config, connectivity, and schema checks (phases 1–3)
+
+![Pre-flight phases 1–3: config validation, Snowflake connectivity, data schema](test-screenshot/pic1.png)
+
+The launcher reads `ml_config.yaml`, verifies AWS credentials and Snowflake reachability,
+then inspects the data schema to confirm expected columns and row-count thresholds.
+
+### Pre-flight — DAG validation (phase 4) and summary
+
+![Pre-flight phase 4: Airflow DAG validation and pre-flight summary](test-screenshot/pic2.png)
+
+The DAG file is downloaded from S3, parsed for cycles, and cross-checked against
+the configured algorithm and metrics. All 12 task operators are confirmed valid before
+any pipeline stage begins.
+
+### Stages 1–4 — data ingestion and validation
+
+![Stages 1–4: data_pull, validate_schema, etl, validate_data](test-screenshot/pic3.png)
+
+- **data_pull** streams the Snowflake query result into 32 Parquet partitions (3,247,891 rows × 412 cols).
+- **validate_schema** confirms all expected columns are present and row count exceeds the minimum threshold.
+- **etl** deduplicates and drops 4 fully-null columns (`feature_13`, `feature_57`, `feature_98`, `feature_204`).
+- **validate_data** runs Great Expectations checks — label nulls, class balance, mostly-non-null, and drift.
+
+### Stages 5–7 — feature engineering and preprocessing
+
+![Stages 5–7: feature_engineer, feature_select, preprocess](test-screenshot/pic4.png)
+
+- **feature_engineer** classifies 408 columns, generates interaction/polynomial features, then prunes high-null,
+  constant, high-correlation, and leakage columns — selecting 351 features and applying `StandardScaler`.
+- **feature_select** persists the 351-feature list to `feature_log.json`.
+- **preprocess** projects to 351 features + label and writes the final 3,247,891 × 352 Parquet.
+
+### Stages 8–9 — model training and evaluation
+
+![Stages 8–9: train_model epoch loop and evaluate_model metrics](test-screenshot/pic5.png)
+
+XGBoost trains for 20 epochs with `lr=0.001`, `batch=256`, converging from loss 0.5312 to 0.0295.
+Evaluation on the held-out partition yields **F1 0.8847 · Precision 0.9124 · Recall 0.8593 · AUC 0.9931**.
+
+### Stages 10–12 — validation, packaging, and registration
+
+![Stages 10–12: validate_model, package_model, register_model](test-screenshot/pic6.png)
+
+- **validate_model** confirms the candidate AUC (0.9931) beats both the floor (0.70) and the champion (0.75),
+  and that inference latency (2.3 ms) is under the 200 ms threshold.
+- **package_model** archives `model.pt` + `metadata.json` into a 44 KB `model.tar.gz` and uploads to S3.
+- **register_model** calls SageMaker `CreateModelPackage` — the package lands in `PendingManualApproval`.
+
+### End-to-end results and SageMaker Model Registry card
+
+![End-to-end results table and SageMaker Model Registry card](test-screenshot/pic7.png)
+
+The final output summarises every stage, its wall-clock time, and key outputs, followed by the
+SageMaker Model Registry entry with ARN, artifact URI, inference image, and all evaluation metrics.
+
+---
+
 ## One-Command AWS Registration
 
 For the full AWS path, fill in `ml_config.yaml`, create the SQL file referenced
@@ -63,18 +127,25 @@ bash ml.sh --force-build
 bash ml.sh --skip-trigger
 ```
 
-For a physical AWS trial without Databricks, set `data.source_type: s3_csv` and
-point `data.s3_input_uri` to a CSV object or prefix in S3. The SQL file still
-must exist for compatibility with the pipeline interface, but the SQL contents
-are ignored in `s3_csv` mode. A placeholder is included at
-`queries/training.sql`.
+The included `ml_config.yaml` is set up for a Snowflake SQL pull in `us-east-2`.
+Create the SQL file referenced by `data.query_file` (default: `queries/model-data.sql`)
+and store your Snowflake credentials in AWS Secrets Manager under the secret name
+set by `DATA_PLATFORM_SECRET_NAME`. The secret should contain:
 
-The included `ml_config.yaml` is set up for an S3 CSV trial in `us-east-2`.
-If your S3 object key contains spaces, keep the URI quoted in YAML, for example:
+```json
+{
+  "server_hostname": "account.snowflakecomputing.com",
+  "http_path": "/path/to/warehouse",
+  "access_token": "snowflake-token-from-secrets-manager"
+}
+```
+
+Then point the config at your query file:
 
 ```yaml
 data:
-  s3_input_uri: "s3://sagemaker-us-east-2-597936860966/tiktok 3ds.csv"
+  source_type: snowflake_sql
+  query_file: queries/model-data.sql
 ```
 
 To create a new ECR repository for every model run, keep:
