@@ -58,6 +58,12 @@ def build_policy(
                 "Resource": model_package_group_arn,
             },
             {
+                "Sid": "StartGlueEtlJob",
+                "Effect": "Allow",
+                "Action": ["glue:StartJobRun", "glue:GetJobRun", "glue:GetJobRuns"],
+                "Resource": "*",
+            },
+            {
                 "Sid": "PullEcrImages",
                 "Effect": "Allow",
                 "Action": [

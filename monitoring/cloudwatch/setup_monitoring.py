@@ -62,6 +62,36 @@ def dashboard_body(namespace: str, pipeline_name: str, region: str) -> str:
                         "stat": "Average",
                     },
                 },
+                {
+                    "type": "metric",
+                    "x": 0,
+                    "y": 6,
+                    "width": 12,
+                    "height": 6,
+                    "properties": {
+                        "region": region,
+                        "title": "Data Drift",
+                        "metrics": [[namespace, "DriftPValue", "PipelineName", pipeline_name]],
+                        "stat": "Minimum",
+                    },
+                },
+                {
+                    "type": "metric",
+                    "x": 12,
+                    "y": 6,
+                    "width": 12,
+                    "height": 6,
+                    "properties": {
+                        "region": region,
+                        "title": "Model Validation",
+                        "metrics": [
+                            [namespace, "CandidateAUC", "PipelineName", pipeline_name],
+                            [".", "ChampionAUC", ".", "."],
+                            [".", "InferenceLatencyMs", ".", "."],
+                        ],
+                        "stat": "Average",
+                    },
+                },
             ]
         }
     )

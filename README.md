@@ -9,10 +9,12 @@ passwords, account IDs, bucket names, and secret names out of source control.
 ```text
 common/                     Shared config, logging, and metric helpers
 infrastructure/iam/          Least-privilege IAM policy generation
+infrastructure/glue/         AWS Glue ETL job submission helper
 monitoring/cloudwatch/       CloudWatch logs, alarms, and dashboard setup
 containers/                  ECR-ready training and inference images
 dags/                        Airflow orchestration DAG
 deployment/                  ECS and EKS deployment templates
+tests/                       Unit tests for local logic and DAG source checks
 stages/data_pull/            SQL data extraction into Parquet
 stages/validation/           Schema, data, and model validation gates
 stages/etl/                  Post-pull cleanup and ETL
@@ -60,6 +62,12 @@ Generate an IAM policy template:
 python .\infrastructure\iam\generate_iam_policy.py --output-file .\outputs\pipeline-policy.json
 ```
 
+Preview an AWS Glue ETL job submission:
+
+```powershell
+python .\infrastructure\glue\submit_glue_job.py --job-name automl-etl --input-uri s3://bucket/raw/ --output-uri s3://bucket/etl/ --dry-run
+```
+
 Preview CloudWatch resources without creating them:
 
 ```powershell
@@ -104,19 +112,19 @@ Run the stage scripts directly:
 python .\stages\data_pull\run_data_pull.py --query-file .\queries\training.sql --output-uri .\data\raw
 python .\stages\validation\schema_validation_spark.py --input-uri .\data\raw --expected-column feature_1 --expected-column feature_2 --expected-column label --freshness-column event_date
 python .\stages\etl\etl_spark.py --input-uri .\data\raw --output-uri .\data\etl --drop-duplicate
-python .\stages\validation\data_validation_spark.py --input-uri .\data\etl --label-column label --mostly-non-null-check feature_1:0.95 --range-check age:0:120 --set-check category:A,B,C
+python .\stages\validation\data_validation_spark.py --input-uri .\data\etl --label-column label --mostly-non-null-check feature_1:0.95 --range-check age:0:120 --set-check category:A,B,C --previous-run-uri .\data\baseline --drift-column feature_1
 python .\stages\feature_engineering\auto_feature_engineering.py --input-uri .\data\etl --output-uri .\data\features --label-column label --feature-log-path .\outputs\feature_log.json
 python .\stages\feature_engineering\feature_select.py --feature-log-path .\outputs\feature_log.json
 python .\stages\preprocess\preprocess_spark.py --input-uri .\data\features --output-uri .\data\processed --feature-log-path .\outputs\feature_log.json --label-column label --drop-null
 python .\stages\training\train_pytorch.py --train-uri .\data\processed --feature-log-path .\outputs\feature_log.json --label-column label --model-dir .\outputs\model
 python .\stages\evaluation\evaluate_pytorch.py --eval-uri .\data\processed --model-dir .\outputs\model --metrics-dir .\outputs\metrics
-python .\stages\validation\model_validation.py --test-uri .\data\processed --model-dir .\outputs\model --report-path .\outputs\model_validation.json
+python .\stages\validation\model_validation.py --test-uri .\data\processed --model-dir .\outputs\model --champion-auc 0.75 --report-path .\outputs\model_validation.json
 ```
 
 Or run the local orchestrator:
 
 ```powershell
-python .\orchestration\run_local_pipeline.py --query-file .\queries\training.sql --label-column label
+python .\orchestration\run_local_pipeline.py --query-file .\queries\training.sql --label-column label --previous-run-uri .\data\baseline --drift-column feature_1 --champion-auc 0.75
 ```
 
 Feature engineering follows this automatic flow:
@@ -146,11 +154,27 @@ python .\stages\deployment\register_model.py --model-package-group your-model-gr
 
 ```text
 pull_data -> validate_schema -> etl -> validate_data -> feature_engineer
--> feature_select -> preprocess -> train_autopilot -> validate_model -> register_model
+-> feature_select -> preprocess -> train_model -> validate_model -> register_model
 ```
 
-The `train_autopilot` task name is kept for the high-level flow, while the
-current implementation invokes the PyTorch training stage.
+The DAG task name is `train_model` because the current implementation trains a
+PyTorch model. A SageMaker Autopilot task should be added as a separate stage if
+that becomes the chosen training backend.
+
+## Tests and CI
+
+The repository includes focused unit tests under `tests/` and a GitHub Actions
+workflow in `.github/workflows/ci.yml`.
+
+Run local checks:
+
+```powershell
+python -m compileall -q .
+pytest -q
+```
+
+The CI workflow compiles Python, runs tests, and builds the training and
+inference Docker images.
 
 ## ECR, ECS, and EKS
 

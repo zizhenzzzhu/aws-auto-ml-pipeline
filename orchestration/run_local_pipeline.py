@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feature-column", action="append", default=[])
     parser.add_argument("--expected-column", action="append", default=[])
     parser.add_argument("--freshness-column", default=None)
+    parser.add_argument("--previous-run-uri", default=None)
+    parser.add_argument("--drift-column", action="append", default=[])
+    parser.add_argument("--champion-auc", type=float, default=None)
+    parser.add_argument("--champion-metrics-file", default=None)
+    parser.add_argument("--champion-model-package-arn", default=None)
     parser.add_argument("--label-column", required=True)
     parser.add_argument("--skip-data-pull", action="store_true")
     parser.add_argument("--skip-schema-validation", action="store_true")
@@ -84,18 +89,21 @@ def main() -> None:
         )
 
     if not args.skip_data_validation:
-        run_step(
-            [
-                sys.executable,
-                "stages/validation/data_validation_spark.py",
-                "--input-uri",
-                args.etl_uri,
-                "--label-column",
-                args.label_column,
-                "--non-null-column",
-                args.label_column,
-            ]
-        )
+        data_validation_command = [
+            sys.executable,
+            "stages/validation/data_validation_spark.py",
+            "--input-uri",
+            args.etl_uri,
+            "--label-column",
+            args.label_column,
+            "--non-null-column",
+            args.label_column,
+        ]
+        if args.previous_run_uri:
+            data_validation_command.extend(["--previous-run-uri", args.previous_run_uri])
+        for column in args.drift_column:
+            data_validation_command.extend(["--drift-column", column])
+        run_step(data_validation_command)
 
     if not args.skip_feature_engineering:
         run_step(
@@ -157,18 +165,23 @@ def main() -> None:
         ]
     )
     if not args.skip_model_validation:
-        run_step(
-            [
-                sys.executable,
-                "stages/validation/model_validation.py",
-                "--test-uri",
-                args.processed_uri,
-                "--model-dir",
-                args.model_dir,
-                "--report-path",
-                "outputs/model_validation.json",
-            ]
-        )
+        model_validation_command = [
+            sys.executable,
+            "stages/validation/model_validation.py",
+            "--test-uri",
+            args.processed_uri,
+            "--model-dir",
+            args.model_dir,
+            "--report-path",
+            "outputs/model_validation.json",
+        ]
+        if args.champion_auc is not None:
+            model_validation_command.extend(["--champion-auc", str(args.champion_auc)])
+        if args.champion_metrics_file:
+            model_validation_command.extend(["--champion-metrics-file", args.champion_metrics_file])
+        if args.champion_model_package_arn:
+            model_validation_command.extend(["--champion-model-package-arn", args.champion_model_package_arn])
+        run_step(model_validation_command)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,8 @@ with DAG(
         "model_package_group": "your-model-package-group",
         "model_artifact_s3_uri": "s3://bucket/model/model.tar.gz",
         "inference_image_uri": "account-id.dkr.ecr.region.amazonaws.com/image:tag",
+        "previous_run_uri": "s3://bucket/pipeline/baseline/",
+        "champion_auc": "0.75",
     },
 ) as dag:
     pull_data = BashOperator(
@@ -75,7 +77,9 @@ with DAG(
             "python stages/validation/data_validation_spark.py "
             "--input-uri {{ params.etl_uri }} "
             "--label-column {{ params.label_column }} "
-            "--mostly-non-null-check feature_1:0.95"
+            "--mostly-non-null-check feature_1:0.95 "
+            "--previous-run-uri {{ params.previous_run_uri }} "
+            "--drift-column feature_1"
         ),
     )
 
@@ -100,8 +104,8 @@ with DAG(
         ),
     )
 
-    train_autopilot = BashOperator(
-        task_id="train_autopilot",
+    train_model = BashOperator(
+        task_id="train_model",
         bash_command=(
             "cd {{ params.repo_root }} && "
             "python stages/training/train_pytorch.py "
@@ -132,6 +136,7 @@ with DAG(
             "python stages/validation/model_validation.py "
             "--test-uri {{ params.processed_uri }} "
             "--model-dir {{ params.model_dir }} "
+            "--champion-auc {{ params.champion_auc }} "
             "--report-path {{ params.model_validation_path }}"
         ),
     )
@@ -150,4 +155,4 @@ with DAG(
     )
 
     pull_data >> validate_schema >> etl >> validate_data >> feature_engineer >> feature_select
-    feature_select >> preprocess >> train_autopilot >> validate_model >> register_model
+    feature_select >> preprocess >> train_model >> validate_model >> register_model

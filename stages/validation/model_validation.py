@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common.config import ensure_dir
-from common.logging_utils import configure_logging, log_event, timed_stage
+from common.logging_utils import configure_logging, emit_pipeline_metric, log_event, timed_stage
 from stages.training.train_pytorch import build_model
 
 
@@ -26,6 +26,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-uri", required=True)
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--champion-model-dir", default=None)
+    parser.add_argument("--champion-metrics-file", default=None)
+    parser.add_argument("--champion-auc", type=float, default=None)
+    parser.add_argument("--champion-model-package-arn", default=None)
+    parser.add_argument("--region", default="us-west-2")
     parser.add_argument("--min-auc", type=float, default=0.75)
     parser.add_argument("--champion-tolerance", type=float, default=0.01)
     parser.add_argument("--fairness-column", default=None)
@@ -89,6 +93,35 @@ def validate_latency(model, metadata: dict[str, object], max_latency_ms: float) 
     return latency_ms
 
 
+def load_champion_auc(args: argparse.Namespace, test_uri: str, batch_size: int) -> float | None:
+    if args.champion_auc is not None:
+        return args.champion_auc
+
+    if args.champion_metrics_file:
+        metrics = json.loads(Path(args.champion_metrics_file).read_text(encoding="utf-8"))
+        for key in ("auc", "candidate_auc", "validation_candidate_auc"):
+            if key in metrics:
+                return float(metrics[key])
+        raise ValueError("Champion metrics file must include auc, candidate_auc, or validation_candidate_auc.")
+
+    if args.champion_model_package_arn:
+        import boto3
+
+        client = boto3.client("sagemaker", region_name=args.region)
+        response = client.describe_model_package(ModelPackageName=args.champion_model_package_arn)
+        metadata = response.get("CustomerMetadataProperties", {})
+        for key in ("auc", "candidate_auc", "validation_candidate_auc"):
+            if key in metadata:
+                return float(metadata[key])
+        raise ValueError("Champion model package metadata does not include an AUC field.")
+
+    if args.champion_model_dir:
+        champion, champion_metadata = load_model(Path(args.champion_model_dir))
+        return evaluate_auc(champion, test_uri, champion_metadata, batch_size)
+
+    return None
+
+
 def main() -> None:
     configure_logging()
     args = parse_args()
@@ -98,13 +131,13 @@ def main() -> None:
 
         model, metadata = load_model(Path(args.model_dir))
         candidate_auc = evaluate_auc(model, args.test_uri, metadata, args.batch_size)
+        emit_pipeline_metric(LOGGER, "CandidateAUC", candidate_auc, "model_validation")
         if candidate_auc < args.min_auc:
             raise AssertionError(f"AUC too low: {candidate_auc:.4f}")
 
-        champion_auc = None
-        if args.champion_model_dir:
-            champion, champion_metadata = load_model(Path(args.champion_model_dir))
-            champion_auc = evaluate_auc(champion, args.test_uri, champion_metadata, args.batch_size)
+        champion_auc = load_champion_auc(args, args.test_uri, args.batch_size)
+        if champion_auc is not None:
+            emit_pipeline_metric(LOGGER, "ChampionAUC", champion_auc, "model_validation")
             if candidate_auc < champion_auc - args.champion_tolerance:
                 raise AssertionError(
                     f"New model ({candidate_auc:.3f}) worse than champion ({champion_auc:.3f})"
@@ -115,11 +148,19 @@ def main() -> None:
             field = ds.field(args.fairness_column)
             for group in args.fairness_group:
                 group_auc = evaluate_auc(model, args.test_uri, metadata, args.batch_size, field == group)
+                emit_pipeline_metric(
+                    LOGGER,
+                    "FairnessGroupAUC",
+                    group_auc,
+                    "model_validation",
+                    {"GroupName": group},
+                )
                 if group_auc < args.min_group_auc:
                     raise AssertionError(f"Fairness fail for {group}: AUC={group_auc:.4f}")
                 group_scores[group] = group_auc
 
         latency_ms = validate_latency(model, metadata, args.max_latency_ms)
+        emit_pipeline_metric(LOGGER, "InferenceLatencyMs", latency_ms, "model_validation")
         report = {
             "status": "passed",
             "candidate_auc": candidate_auc,

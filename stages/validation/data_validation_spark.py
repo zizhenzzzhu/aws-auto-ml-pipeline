@@ -13,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common.config import ensure_dir
-from common.logging_utils import configure_logging, log_event, timed_stage
+from common.logging_utils import configure_logging, emit_pipeline_metric, log_event, timed_stage
 from data_pull import create_spark_session
 
 
@@ -117,7 +117,14 @@ def validate_quality_rules(frame, args: argparse.Namespace) -> dict[str, object]
     return reports
 
 
-def validate_drift(spark, frame, previous_run_uri: str | None, columns: list[str], min_p_value: float) -> list[dict[str, object]]:
+def validate_drift(
+    spark,
+    frame,
+    previous_run_uri: str | None,
+    columns: list[str],
+    min_p_value: float,
+    logger: logging.Logger | None = None,
+) -> list[dict[str, object]]:
     if not previous_run_uri or not columns:
         return []
 
@@ -131,6 +138,21 @@ def validate_drift(spark, frame, previous_run_uri: str | None, columns: list[str
         if not current_values or not previous_values:
             continue
         stat, p_value = ks_2samp(current_values, previous_values)
+        if logger:
+            emit_pipeline_metric(
+                logger,
+                "DriftPValue",
+                float(p_value),
+                "data_validation",
+                {"FeatureName": column},
+            )
+            emit_pipeline_metric(
+                logger,
+                "DriftKSStatistic",
+                float(stat),
+                "data_validation",
+                {"FeatureName": column},
+            )
         if p_value <= min_p_value:
             raise AssertionError(f"Drift detected in {column}: p={p_value:.6f}")
         reports.append({"column": column, "ks_statistic": float(stat), "p_value": float(p_value)})
@@ -147,12 +169,14 @@ def main() -> None:
         quality_report = validate_quality_rules(frame, args)
         ge_report = run_great_expectations_if_available(frame, args)
         balance_report = validate_class_balance(frame, args.label_column, args.min_minority_ratio)
+        emit_pipeline_metric(LOGGER, "MinorityClassRatio", float(balance_report["minority_ratio"]), "data_validation")
         drift_report = validate_drift(
             spark,
             frame,
             args.previous_run_uri,
             args.drift_column,
             args.min_drift_p_value,
+            LOGGER,
         )
 
         report = {
