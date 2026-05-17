@@ -1,0 +1,10 @@
+boto3
+numpy
+pandas
+pyarrow
+scikit-learn
+scipy
+shap
+sagemaker
+torch
+xgboost

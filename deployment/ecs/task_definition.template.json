@@ -1,0 +1,36 @@
+{
+  "family": "automl-inference",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::account-id:role/ecs-task-execution-role",
+  "taskRoleArn": "arn:aws:iam::account-id:role/automl-inference-role",
+  "containerDefinitions": [
+    {
+      "name": "automl-inference",
+      "image": "account-id.dkr.ecr.region.amazonaws.com/automl-inference:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "MODEL_DIR",
+          "value": "/opt/ml/model"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/aws/ecs/automl-inference",
+          "awslogs-region": "us-west-2",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

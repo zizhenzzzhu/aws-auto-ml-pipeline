@@ -1,0 +1,12 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+COPY containers/training/requirements_train.txt ./requirements_train.txt
+RUN pip install --no-cache-dir -r requirements_train.txt
+
+COPY common ./common
+COPY data_pull.py ./data_pull.py
+COPY stages ./stages
+
+ENTRYPOINT ["python", "stages/training/train_pytorch.py"]
