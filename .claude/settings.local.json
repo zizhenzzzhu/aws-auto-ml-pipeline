@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aws s3 *)",
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(mkdir -p data/raw)",
+      "Bash(python data_pull.py --source-type s3_csv --engine pandas --query-file queries/training.sql --s3-input-uri \"s3://sagemaker-us-east-2-597936860966/tiktok 3ds.csv\" --output-uri data/raw/training.parquet)",
+      "Bash(python -c \"import pyspark; print\\('PySpark:', pyspark.__version__\\)\")",
+      "Bash(python -c \"import torch; print\\('PyTorch:', torch.__version__\\)\")",
+      "Bash(python -c \"import sklearn; print\\('sklearn:', sklearn.__version__\\)\")",
+      "Bash(python -c \"import pyarrow; print\\('pyarrow:', pyarrow.__version__\\)\")",
+      "Bash(python -c \"import torch, numpy; print\\('NumPy:', numpy.__version__\\); print\\('PyTorch:', torch.__version__\\); x = torch.tensor\\([1.0,2.0]\\); print\\('Torch tensor OK:', x\\)\")",
+      "Bash(python scripts/pandas_preprocess.py --input-uri data/raw/training.parquet --output-uri data/processed/training.parquet --label-column is_fraud --feature-log-path outputs/feature_log.json)",
+      "Bash(python stages/training/train_pytorch.py --train-uri data/processed/training.parquet --model-dir outputs/model --feature-log-path outputs/feature_log.json --label-column is_fraud --epochs 10 --hidden-dim 64 --batch-size 256)",
+      "Bash(python stages/evaluation/evaluate_pytorch.py --eval-uri data/processed/training.parquet --model-dir outputs/model --metrics-dir outputs/metrics)",
+      "Bash(python -c \"import json; print\\(json.dumps\\(json.load\\(open\\('outputs/metrics/metrics.json'\\)\\), indent=2\\)\\)\")",
+      "Bash(python stages/validation/model_validation.py --test-uri data/processed/training.parquet --model-dir outputs/model --champion-auc 0.5 --min-auc 0.70 --report-path outputs/model_validation.json)",
+      "Bash(python -c \"import json; print\\(json.dumps\\(json.load\\(open\\('outputs/model_validation.json'\\)\\), indent=2\\)\\)\")",
+      "Bash(python stages/training/train_pytorch.py --train-uri data/processed/training.parquet --model-dir outputs/model --feature-log-path outputs/feature_log.json --label-column is_fraud --epochs 20 --hidden-dim 128 --batch-size 256)",
+      "Bash(python -c \"import json; m=json.load\\(open\\('outputs/metrics/metrics.json'\\)\\); print\\('Loss:    ', round\\(m['loss'],6\\)\\); print\\('Accuracy:', round\\(m['accuracy'],4\\)\\)\")",
+      "Bash(python -c \"import json; v=json.load\\(open\\('outputs/model_validation.json'\\)\\); print\\(json.dumps\\(v, indent=2\\)\\)\")",
+      "Bash(python stages/deployment/package_model.py --model-dir outputs/model --model-artifact-s3-uri outputs/model.tar.gz)",
+      "Bash(python -c \"import tarfile; [print\\(' ', m.name, m.size, 'bytes'\\) for m in tarfile.open\\('outputs/model.tar.gz'\\).getmembers\\(\\)]\")",
+      "Bash(python stages/deployment/register_model.py --model-package-group tiktok-3ds-model-group --model-artifact-s3-uri s3://sagemaker-us-east-2-597936860966/model/model.tar.gz --inference-image-uri 597936860966.dkr.ecr.us-east-2.amazonaws.com/automl-inference:latest --metrics-file outputs/metrics/metrics.json --validation-report outputs/model_validation.json --dry-run)",
+      "Bash(python stages/deployment/register_model.py --model-package-group fraud-transaction-model-v2 --model-artifact-s3-uri s3://sagemaker-us-east-2-597936860966/model/fraud-transaction-model-v2/model.tar.gz --inference-image-uri 597936860966.dkr.ecr.us-east-2.amazonaws.com/automl-inference:latest --metrics-file outputs/metrics/metrics.json --validation-report outputs/model_validation.json --region us-east-2)",
+      "Bash(docker info *)",
+      "Bash(aws ecr *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Created:', d['repository']['repositoryUri']\\)\")",
+      "Bash(docker login *)",
+      "Bash(docker build *)",
+      "Bash(docker image *)",
+      "Bash(docker push *)",
+      "Bash(python *)",
+      "Bash(python3 -m py_compile stages/training/train_pytorch.py)"
+    ]
+  }
+}

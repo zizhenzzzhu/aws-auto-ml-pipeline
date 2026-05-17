@@ -21,7 +21,7 @@ LOGGER = logging.getLogger("stages.data_pull")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pull source data into Parquet for model development.")
-    parser.add_argument("--source-type", default=os.getenv("DATA_SOURCE_TYPE", "databricks_sql"), choices=("databricks_sql", "s3_csv"))
+    parser.add_argument("--source-type", default=os.getenv("DATA_SOURCE_TYPE", "databricks_sql"), choices=("databricks_sql", "s3_csv", "snowflake_sql"))
     parser.add_argument("--mode", default=os.getenv("DATA_PULL_MODE", "cloud"), choices=("cloud", "basic", "local"))
     parser.add_argument("--engine", default="spark", choices=("spark", "pandas"))
     parser.add_argument("--query-file", required=True)
