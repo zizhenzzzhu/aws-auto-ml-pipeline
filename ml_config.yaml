@@ -1,0 +1,48 @@
+project:
+  pipeline_name: aws-auto-ml-pipeline
+  repo_root: /opt/airflow/dags/repo
+
+aws:
+  region: us-west-2
+  s3_bucket: your-bucket-name
+
+airflow:
+  dag_id: improved_automl_pipeline
+  variable_name: automl_pipeline_config
+  generated_conf_path: outputs/airflow_dag_conf.json
+
+data:
+  query_file: queries/training.sql
+  raw_uri: s3://your-bucket-name/pipeline/raw/
+  etl_uri: s3://your-bucket-name/pipeline/etl/
+  feature_uri: s3://your-bucket-name/pipeline/features/
+  processed_uri: s3://your-bucket-name/pipeline/processed/
+  previous_run_uri: s3://your-bucket-name/pipeline/baseline/
+  label_column: label
+  freshness_column: event_date
+  expected_columns:
+    - feature_1
+    - feature_2
+    - label
+  mostly_non_null_checks:
+    - feature_1:0.95
+  range_checks: []
+  set_checks: []
+  drift_columns:
+    - feature_1
+
+model:
+  model_dir: /opt/airflow/dags/repo/outputs/model
+  metrics_dir: /opt/airflow/dags/repo/outputs/metrics
+  feature_log_path: /opt/airflow/dags/repo/outputs/feature_log.json
+  validation_report_path: /opt/airflow/dags/repo/outputs/model_validation.json
+  model_package_group: your-model-package-group
+  model_artifact_s3_uri: s3://your-bucket-name/model/model.tar.gz
+  champion_auc: 0.75
+
+ecr:
+  account_id: "111111111111"
+  repository_name: automl-inference
+  tag: latest
+  dockerfile: containers/inference/Dockerfile.inference
+  build_context: .

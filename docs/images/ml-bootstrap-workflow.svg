@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">ML bootstrap workflow</title>
+  <desc id="desc">User fills ml_config.yaml, runs bash ml.sh, the launcher validates config, SQL, S3, ECR, Airflow registration, and triggers the AWS pipeline.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f2937"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #475569; }
+      .label { font: 700 17px Arial, sans-serif; fill: #0f172a; }
+      .small { font: 400 14px Arial, sans-serif; fill: #475569; }
+      .tiny { font: 400 12px Arial, sans-serif; fill: #64748b; }
+      .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; rx: 16; filter: url(#shadow); }
+      .step { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.4; rx: 14; }
+      .user { fill: #dbeafe; stroke: #3b82f6; }
+      .shell { fill: #dcfce7; stroke: #22c55e; }
+      .aws { fill: #fffbeb; stroke: #f59e0b; }
+      .airflow { fill: #f5f3ff; stroke: #8b5cf6; }
+      .line { stroke: #1f2937; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #64748b; stroke-width: 1.6; stroke-dasharray: 6 6; fill: none; marker-end: url(#arrow); }
+      .badge { fill: #0f172a; }
+      .badgeText { font: 700 14px Arial, sans-serif; fill: #ffffff; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="760"/>
+
+  <text x="70" y="62" class="title">One-command ML pipeline registration</text>
+  <text x="70" y="92" class="subtitle">A user-provided YAML file drives validation, container readiness, Airflow registration, and the first AWS run.</text>
+
+  <rect x="70" y="130" width="260" height="118" class="card user"/>
+  <text x="100" y="173" class="label">1. User config</text>
+  <text x="100" y="202" class="small">Fill in ml_config.yaml</text>
+  <text x="100" y="224" class="tiny">SQL path, S3 URIs, ECR, Airflow, model registry</text>
+
+  <path class="line" d="M330 189 H420"/>
+
+  <rect x="420" y="130" width="260" height="118" class="card shell"/>
+  <text x="450" y="173" class="label">2. Run launcher</text>
+  <text x="450" y="202" class="small">bash ml.sh</text>
+  <text x="450" y="224" class="tiny">Calls scripts/bootstrap_ml_pipeline.py</text>
+
+  <path class="line" d="M550 248 V314"/>
+
+  <rect x="250" y="314" width="600" height="292" class="card"/>
+  <text x="294" y="354" class="label">Bootstrap checks</text>
+  <text x="294" y="379" class="small">Fail fast before any AWS pipeline run starts.</text>
+
+  <g transform="translate(294 410)">
+    <rect width="245" height="48" class="step"/>
+    <circle cx="24" cy="24" r="14" class="badge"/>
+    <text x="20" y="29" class="badgeText">1</text>
+    <text x="54" y="30" class="small">Validate config fields</text>
+  </g>
+  <g transform="translate(561 410)">
+    <rect width="245" height="48" class="step"/>
+    <circle cx="24" cy="24" r="14" class="badge"/>
+    <text x="20" y="29" class="badgeText">2</text>
+    <text x="54" y="30" class="small">Validate SQL file</text>
+  </g>
+  <g transform="translate(294 478)">
+    <rect width="245" height="48" class="step aws"/>
+    <circle cx="24" cy="24" r="14" class="badge"/>
+    <text x="20" y="29" class="badgeText">3</text>
+    <text x="54" y="30" class="small">Validate S3 bucket</text>
+  </g>
+  <g transform="translate(561 478)">
+    <rect width="245" height="48" class="step aws"/>
+    <circle cx="24" cy="24" r="14" class="badge"/>
+    <text x="20" y="29" class="badgeText">4</text>
+    <text x="54" y="30" class="small">Build or reuse ECR image</text>
+  </g>
+  <g transform="translate(294 546)">
+    <rect width="245" height="48" class="step airflow"/>
+    <circle cx="24" cy="24" r="14" class="badge"/>
+    <text x="20" y="29" class="badgeText">5</text>
+    <text x="54" y="30" class="small">Register config in Airflow</text>
+  </g>
+  <g transform="translate(561 546)">
+    <rect width="245" height="48" class="step airflow"/>
+    <circle cx="24" cy="24" r="14" class="badge"/>
+    <text x="20" y="29" class="badgeText">6</text>
+    <text x="54" y="30" class="small">Trigger first DAG run</text>
+  </g>
+
+  <path class="line" d="M850 460 H942"/>
+
+  <rect x="942" y="382" width="205" height="156" class="card aws"/>
+  <text x="972" y="432" class="label">AWS pipeline</text>
+  <text x="972" y="463" class="small">Airflow runs the DAG</text>
+  <text x="972" y="487" class="tiny">Data pull, ETL, validation,</text>
+  <text x="972" y="506" class="tiny">feature engineering, training,</text>
+  <text x="972" y="525" class="tiny">model validation, registration</text>
+
+  <path class="dash" d="M1045 538 V632"/>
+  <rect x="888" y="632" width="314" height="72" class="card"/>
+  <text x="916" y="674" class="label">Model registered in SageMaker</text>
+  <text x="916" y="696" class="tiny">Only after validation gates pass</text>
+</svg>
