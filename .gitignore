@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+ml_config.local.yaml
 
 __pycache__/
 *.py[cod]

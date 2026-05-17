@@ -30,6 +30,39 @@ queries/                     Local SQL files, ignored by git
 IAM controls who can do what at each stage. CloudWatch observes stage logs,
 metrics, alarms, and dashboards.
 
+## One-Command AWS Registration
+
+For the full AWS path, fill in `ml_config.yaml`, create the SQL file referenced
+by `data.query_file`, then run:
+
+![One-command ML bootstrap workflow](docs/images/ml-bootstrap-workflow.svg)
+
+```bash
+bash ml.sh
+```
+
+The launcher performs these checks and actions:
+
+```text
+ml_config.yaml
+  -> bash ml.sh
+  -> validate required config fields
+  -> validate SQL file exists
+  -> validate S3 bucket access
+  -> validate ECR image, build and push when missing
+  -> write outputs/airflow_dag_conf.json
+  -> register config in Airflow
+  -> trigger the Airflow DAG
+```
+
+Useful options:
+
+```bash
+bash ml.sh --dry-run
+bash ml.sh --force-build
+bash ml.sh --skip-trigger
+```
+
 ## Data Pull Stage
 
 Use `data-pull.py` with `mode=cloud` for AWS execution against Databricks SQL.
@@ -151,6 +184,8 @@ python .\stages\deployment\register_model.py --model-package-group your-model-gr
 ## Airflow
 
 `dags/improved_automl_pipeline.py` defines the weekly DAG:
+
+![AWS ML pipeline workflow](docs/images/aws-pipeline-workflow.svg)
 
 ```text
 pull_data -> validate_schema -> etl -> validate_data -> feature_engineer

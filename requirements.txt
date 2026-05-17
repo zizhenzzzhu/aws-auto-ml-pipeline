@@ -4,6 +4,7 @@ great_expectations==0.18.21
 pandas==2.2.2
 pyarrow==16.1.0
 pyspark==3.5.1
+PyYAML==6.0.2
 scikit-learn==1.5.1
 scipy==1.14.0
 torch==2.3.1

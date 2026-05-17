@@ -11,6 +11,15 @@ from airflow.operators.bash import BashOperator
 DEFAULT_ARGS = {"owner": "ml-platform", "retries": 1}
 
 
+def cfg(name: str) -> str:
+    return "{{ dag_run.conf.get('" + name + "', params." + name + ") if dag_run else params." + name + " }}"
+
+
+def cli_list_cfg(name: str, flag: str) -> str:
+    values = "dag_run.conf.get('" + name + "', params." + name + ") if dag_run else params." + name
+    return "{% set values = " + values + " %}{% for value in values %} " + flag + " {{ value }}{% endfor %}"
+
+
 with DAG(
     dag_id="improved_automl_pipeline",
     default_args=DEFAULT_ARGS,
@@ -34,38 +43,42 @@ with DAG(
         "inference_image_uri": "account-id.dkr.ecr.region.amazonaws.com/image:tag",
         "previous_run_uri": "s3://bucket/pipeline/baseline/",
         "champion_auc": "0.75",
+        "expected_columns": ["feature_1", "feature_2", "label"],
+        "freshness_column": "event_date",
+        "mostly_non_null_checks": ["feature_1:0.95"],
+        "range_checks": [],
+        "set_checks": [],
+        "drift_columns": ["feature_1"],
     },
 ) as dag:
     pull_data = BashOperator(
         task_id="pull_data",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/data_pull/run_data_pull.py "
-            "--query-file {{ params.query_file }} "
-            "--output-uri {{ params.raw_uri }}"
+            f"--query-file {cfg('query_file')} "
+            f"--output-uri {cfg('raw_uri')}"
         ),
     )
 
     validate_schema = BashOperator(
         task_id="validate_schema",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/validation/schema_validation_spark.py "
-            "--input-uri {{ params.raw_uri }} "
-            "--expected-column feature_1 "
-            "--expected-column feature_2 "
-            "--expected-column {{ params.label_column }} "
-            "--freshness-column event_date"
+            f"--input-uri {cfg('raw_uri')} "
+            f"{cli_list_cfg('expected_columns', '--expected-column')} "
+            f"--freshness-column {cfg('freshness_column')}"
         ),
     )
 
     etl = BashOperator(
         task_id="etl",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/etl/etl_spark.py "
-            "--input-uri {{ params.raw_uri }} "
-            "--output-uri {{ params.etl_uri }} "
+            f"--input-uri {cfg('raw_uri')} "
+            f"--output-uri {cfg('etl_uri')} "
             "--drop-duplicate"
         ),
     )
@@ -73,58 +86,60 @@ with DAG(
     validate_data = BashOperator(
         task_id="validate_data",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/validation/data_validation_spark.py "
-            "--input-uri {{ params.etl_uri }} "
-            "--label-column {{ params.label_column }} "
-            "--mostly-non-null-check feature_1:0.95 "
-            "--previous-run-uri {{ params.previous_run_uri }} "
-            "--drift-column feature_1"
+            f"--input-uri {cfg('etl_uri')} "
+            f"--label-column {cfg('label_column')} "
+            f"{cli_list_cfg('mostly_non_null_checks', '--mostly-non-null-check')} "
+            f"{cli_list_cfg('range_checks', '--range-check')} "
+            f"{cli_list_cfg('set_checks', '--set-check')} "
+            f"--previous-run-uri {cfg('previous_run_uri')} "
+            f"{cli_list_cfg('drift_columns', '--drift-column')}"
         ),
     )
 
     feature_engineer = BashOperator(
         task_id="feature_engineer",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/feature_engineering/auto_feature_engineering.py "
-            "--input-uri {{ params.etl_uri }} "
-            "--output-uri {{ params.feature_uri }} "
-            "--label-column {{ params.label_column }} "
-            "--feature-log-path {{ params.feature_log_path }}"
+            f"--input-uri {cfg('etl_uri')} "
+            f"--output-uri {cfg('feature_uri')} "
+            f"--label-column {cfg('label_column')} "
+            f"--feature-log-path {cfg('feature_log_path')}"
         ),
     )
 
     feature_select = BashOperator(
         task_id="feature_select",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/feature_engineering/feature_select.py "
-            "--feature-log-path {{ params.feature_log_path }}"
+            f"--feature-log-path {cfg('feature_log_path')}"
         ),
     )
 
     train_model = BashOperator(
         task_id="train_model",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/training/train_pytorch.py "
-            "--train-uri {{ params.processed_uri }} "
-            "--feature-log-path {{ params.feature_log_path }} "
-            "--label-column {{ params.label_column }} "
-            "--model-dir {{ params.model_dir }}"
+            f"--train-uri {cfg('processed_uri')} "
+            f"--feature-log-path {cfg('feature_log_path')} "
+            f"--label-column {cfg('label_column')} "
+            f"--model-dir {cfg('model_dir')}"
         ),
     )
 
     preprocess = BashOperator(
         task_id="preprocess",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/preprocess/preprocess_spark.py "
-            "--input-uri {{ params.feature_uri }} "
-            "--output-uri {{ params.processed_uri }} "
-            "--feature-log-path {{ params.feature_log_path }} "
-            "--label-column {{ params.label_column }} "
+            f"--input-uri {cfg('feature_uri')} "
+            f"--output-uri {cfg('processed_uri')} "
+            f"--feature-log-path {cfg('feature_log_path')} "
+            f"--label-column {cfg('label_column')} "
             "--drop-null"
         ),
     )
@@ -132,25 +147,25 @@ with DAG(
     validate_model = BashOperator(
         task_id="validate_model",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/validation/model_validation.py "
-            "--test-uri {{ params.processed_uri }} "
-            "--model-dir {{ params.model_dir }} "
-            "--champion-auc {{ params.champion_auc }} "
-            "--report-path {{ params.model_validation_path }}"
+            f"--test-uri {cfg('processed_uri')} "
+            f"--model-dir {cfg('model_dir')} "
+            f"--champion-auc {cfg('champion_auc')} "
+            f"--report-path {cfg('model_validation_path')}"
         ),
     )
 
     register_model = BashOperator(
         task_id="register_model",
         bash_command=(
-            "cd {{ params.repo_root }} && "
+            f"cd {cfg('repo_root')} && "
             "python stages/deployment/register_model.py "
-            "--model-package-group {{ params.model_package_group }} "
-            "--model-artifact-s3-uri {{ params.model_artifact_s3_uri }} "
-            "--inference-image-uri {{ params.inference_image_uri }} "
-            "--metrics-file {{ params.metrics_dir }}/metrics.json "
-            "--validation-report {{ params.model_validation_path }}"
+            f"--model-package-group {cfg('model_package_group')} "
+            f"--model-artifact-s3-uri {cfg('model_artifact_s3_uri')} "
+            f"--inference-image-uri {cfg('inference_image_uri')} "
+            f"--metrics-file {cfg('metrics_dir')}/metrics.json "
+            f"--validation-report {cfg('model_validation_path')}"
         ),
     )
 
