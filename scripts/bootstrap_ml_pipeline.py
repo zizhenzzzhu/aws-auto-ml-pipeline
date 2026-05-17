@@ -125,8 +125,8 @@ def validate_data_source(config: dict[str, Any]) -> None:
             raise ValueError("data.s3_input_uri is required when data.source_type is s3_csv.")
         if isinstance(s3_input_uri, str) and "your-" in s3_input_uri.lower():
             raise ValueError("Replace placeholder data.s3_input_uri before running.")
-    if source_type not in {"s3_csv", "databricks_sql"}:
-        raise ValueError("data.source_type must be one of: s3_csv, databricks_sql.")
+    if source_type not in {"s3_csv", "databricks_sql", "snowflake_sql"}:
+        raise ValueError("data.source_type must be one of: s3_csv, databricks_sql, snowflake_sql.")
 
 
 def require_cli(name: str) -> None:

@@ -83,6 +83,14 @@ class DataPullStage:
                 .csv(self._required_s3_input_uri())
             )
 
+        if self.config.source_type == "snowflake_sql":
+            sql = self._resolve_query(query=query, sql_file=sql_file)
+            raise NotImplementedError(
+                "snowflake_sql Spark mode is not yet implemented. "
+                "Use --engine pandas (run_local_pipeline.py) for local runs, "
+                "or wire a Snowflake JDBC connector in create_spark_session()."
+            )
+
         if self.config.source_type != "databricks_sql":
             raise ValueError(f"Unsupported source_type: {self.config.source_type}")
 
@@ -301,7 +309,7 @@ def create_torch_dataloader(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pull sanitized training data for the AWS auto-ML pipeline.")
-    parser.add_argument("--source-type", default=os.getenv("DATA_SOURCE_TYPE", "databricks_sql"), choices=("databricks_sql", "s3_csv"))
+    parser.add_argument("--source-type", default=os.getenv("DATA_SOURCE_TYPE", "databricks_sql"), choices=("databricks_sql", "s3_csv", "snowflake_sql"))
     parser.add_argument("--mode", default=os.getenv("DATA_PULL_MODE", "cloud"), choices=("cloud", "basic", "local"))
     parser.add_argument("--engine", default="spark", choices=("spark", "pandas"))
     parser.add_argument("--query-file", required=True, help="Path to a local SQL file. Keep SQL out of source control.")

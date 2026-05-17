@@ -11,14 +11,13 @@ airflow:
   dag_id: improved_automl_pipeline
   variable_name: automl_pipeline_config
   generated_conf_path: outputs/airflow_dag_conf.json
+  # S3 location where Airflow DAG .py files are stored and synced from.
+  dag_s3_uri: s3://sagemaker-us-east-2-597936860966/dags/
 
 data:
-  # Use s3_csv for AWS testing without Databricks. The SQL file is only a
-  # compatibility placeholder and its contents are ignored in this mode.
-  source_type: s3_csv
-  query_file: queries/training.sql
-  # Space in the filename is preserved as-is; URL-encode to %20 if any tool rejects it.
-  s3_input_uri: "s3://sagemaker-us-east-2-597936860966/tiktok 3ds.csv"
+  # snowflake_sql: execute query_file against Snowflake and stream results to S3.
+  source_type: snowflake_sql
+  query_file: queries/model-data.sql
   csv_header: true
   csv_infer_schema: true
   raw_uri: s3://sagemaker-us-east-2-597936860966/pipeline/raw/
@@ -26,28 +25,48 @@ data:
   feature_uri: s3://sagemaker-us-east-2-597936860966/pipeline/features/
   processed_uri: s3://sagemaker-us-east-2-597936860966/pipeline/processed/
   previous_run_uri: s3://sagemaker-us-east-2-597936860966/pipeline/baseline/
-  # UPDATE label_column to the actual target column name in your CSV.
-  label_column: label
-  # Set freshness_column to the date column in your CSV, or leave null to skip the check.
+  label_column: is_fraud
+  # Static test file has no rolling freshness guarantee — skip stale-data check.
   freshness_column: null
-  # UPDATE expected_columns to real column names once you've inspected the CSV.
-  # Leave empty to skip schema column-presence validation.
-  expected_columns: []
-  # UPDATE mostly_non_null_checks once you know the column names, e.g. ["col_name:0.95"]
-  mostly_non_null_checks: []
+  # Core columns that must always be present in the pulled data.
+  expected_columns:
+    - bank_transaction_id
+    - amount
+    - is_fraud
+    - user_transaction_time
+    - tf_model_score
+  # ~3% null — still above 95% non-null threshold.
+  mostly_non_null_checks:
+    - dv_cardAccountId_time_since_last_transaction_V2:0.95
   range_checks: []
   set_checks: []
-  # UPDATE drift_columns with real numeric column names once the CSV schema is known.
-  drift_columns: []
+  # Stable numeric features to watch for distribution shift between runs.
+  drift_columns:
+    - amount
+    - tf_model_score
+    - dv_card_cnt_24h
 
 model:
   model_dir: /opt/airflow/repo/outputs/model
   metrics_dir: /opt/airflow/repo/outputs/metrics
   feature_log_path: /opt/airflow/repo/outputs/feature_log.json
   validation_report_path: /opt/airflow/repo/outputs/model_validation.json
-  model_package_group: tiktok-3ds-model-group
+  model_package_group: fraud-transaction-model
   model_artifact_s3_uri: s3://sagemaker-us-east-2-597936860966/model/model.tar.gz
   champion_auc: 0.75
+  # Algorithm to use for training. Choices: neural_network, xgboost, lightgbm, random_forest
+  algorithm: neural_network
+  # Metrics to compute during evaluation and register as model metadata.
+  evaluation_metrics:
+    - f1
+    - precision
+    - recall
+    - auc
+  hyperparameters:
+    learning_rate: 0.001
+    epochs: 20
+    hidden_dim: 128
+    batch_size: 256
 
 ecr:
   account_id: "597936860966"

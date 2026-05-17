@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run local pipeline stages in order.")
     parser.add_argument("--query-file", required=True)
-    parser.add_argument("--source-type", default="s3_csv", choices=("s3_csv", "databricks_sql"))
+    parser.add_argument("--source-type", default="s3_csv", choices=("s3_csv", "databricks_sql", "snowflake_sql"))
     parser.add_argument("--s3-input-uri", default=None)
     parser.add_argument("--csv-header", default="true")
     parser.add_argument("--csv-infer-schema", default="true")
