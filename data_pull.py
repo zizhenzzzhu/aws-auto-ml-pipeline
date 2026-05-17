@@ -14,6 +14,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Iterable
 
 
@@ -26,6 +27,7 @@ SECRET_KEY_ALIASES = {
 
 @dataclass
 class DataPullConfig:
+    source_type: str = field(default_factory=lambda: os.getenv("DATA_SOURCE_TYPE", "databricks_sql"))
     mode: str = "cloud"
     catalog: str = field(default_factory=lambda: os.getenv("DATA_PLATFORM_CATALOG", ""))
     schema: str = field(default_factory=lambda: os.getenv("DATA_PLATFORM_SCHEMA", ""))
@@ -38,6 +40,9 @@ class DataPullConfig:
     jdbc_driver: str = field(
         default_factory=lambda: os.getenv("DATA_PLATFORM_JDBC_DRIVER", "com.databricks.client.jdbc.Driver")
     )
+    s3_input_uri: str | None = field(default_factory=lambda: os.getenv("S3_INPUT_URI"))
+    csv_header: bool = field(default_factory=lambda: os.getenv("CSV_HEADER", "true").lower() == "true")
+    csv_infer_schema: bool = field(default_factory=lambda: os.getenv("CSV_INFER_SCHEMA", "true").lower() == "true")
 
 
 class DataPullStage:
@@ -49,9 +54,13 @@ class DataPullStage:
     def run_pandas(self, query: str | None = None, sql_file: str | Path | None = None):
         """Run a query into a pandas DataFrame for lightweight validation."""
         import pandas as pd
-        from databricks import sql as databricks_sql
 
         sql = self._resolve_query(query=query, sql_file=sql_file)
+        if self.config.source_type == "s3_csv":
+            return self._read_csv_pandas()
+
+        from databricks import sql as databricks_sql
+
         creds = self._databricks_credentials()
 
         with databricks_sql.connect(
@@ -65,8 +74,20 @@ class DataPullStage:
 
     def run_spark(self, query: str | None = None, sql_file: str | Path | None = None, spark=None):
         """Run a query into a PySpark DataFrame through JDBC."""
-        sql = self._resolve_query(query=query, sql_file=sql_file)
         spark = spark or create_spark_session()
+
+        if self.config.source_type == "s3_csv":
+            return (
+                spark.read.option("header", str(self.config.csv_header).lower())
+                .option("inferSchema", str(self.config.csv_infer_schema).lower())
+                .csv(self._required_s3_input_uri())
+            )
+
+        if self.config.source_type != "databricks_sql":
+            raise ValueError(f"Unsupported source_type: {self.config.source_type}")
+
+        sql = self._resolve_query(query=query, sql_file=sql_file)
+
         creds = self._databricks_credentials()
         jdbc_url = self._jdbc_url(creds["server_hostname"], creds["http_path"])
 
@@ -144,6 +165,29 @@ class DataPullStage:
             f"{catalog_param}{schema_param}"
         )
 
+    def _required_s3_input_uri(self) -> str:
+        if not self.config.s3_input_uri:
+            raise ValueError("S3_INPUT_URI or --s3-input-uri is required when source_type=s3_csv.")
+        return self.config.s3_input_uri
+
+    def _read_csv_pandas(self):
+        import pandas as pd
+
+        input_uri = self._required_s3_input_uri()
+        if not input_uri.startswith("s3://"):
+            return pd.read_csv(input_uri, header=0 if self.config.csv_header else None)
+
+        import boto3
+
+        parsed = urlparse(input_uri)
+        bucket = parsed.netloc
+        key = parsed.path.lstrip("/")
+        if not bucket or not key or key.endswith("/"):
+            raise ValueError("Pandas S3 CSV mode requires a single s3://bucket/key.csv object, not a prefix.")
+
+        response = boto3.client("s3", region_name=self.config.region).get_object(Bucket=bucket, Key=key)
+        return pd.read_csv(response["Body"], header=0 if self.config.csv_header else None)
+
     @staticmethod
     def _resolve_query(query: str | None = None, sql_file: str | Path | None = None) -> str:
         if query and sql_file:
@@ -164,12 +208,36 @@ class DataPullStage:
 
 
 def create_spark_session(app_name: str = "aws-auto-ml-data-pull", extra_conf: dict[str, str] | None = None):
-    """Create a Spark session for the data pull stage."""
+    """Create a Spark session, automatically configuring S3A when running locally.
+
+    Set SPARK_JARS_PACKAGES to include hadoop-aws + aws-java-sdk-bundle for local S3 access, e.g.:
+      org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.367
+    """
     from pyspark.sql import SparkSession
 
     builder = SparkSession.builder.appName(app_name)
+
+    jars_packages = os.getenv("SPARK_JARS_PACKAGES")
+    if jars_packages:
+        builder = builder.config("spark.jars.packages", jars_packages)
+
+    # S3A filesystem — applied when running outside EMR/Databricks where these are pre-configured.
+    s3a_settings: dict[str, str] = {}
+    if os.getenv("SPARK_HADOOP_FS_S3A_IMPL"):
+        s3a_settings["spark.hadoop.fs.s3a.impl"] = os.environ["SPARK_HADOOP_FS_S3A_IMPL"]
+    if os.getenv("AWS_ACCESS_KEY_ID"):
+        s3a_settings["spark.hadoop.fs.s3a.access.key"] = os.environ["AWS_ACCESS_KEY_ID"]
+    if os.getenv("AWS_SECRET_ACCESS_KEY"):
+        s3a_settings["spark.hadoop.fs.s3a.secret.key"] = os.environ["AWS_SECRET_ACCESS_KEY"]
+    if os.getenv("AWS_SESSION_TOKEN"):
+        s3a_settings["spark.hadoop.fs.s3a.session.token"] = os.environ["AWS_SESSION_TOKEN"]
+
+    for key, value in s3a_settings.items():
+        builder = builder.config(key, value)
+
     for key, value in (extra_conf or {}).items():
         builder = builder.config(key, value)
+
     return builder.getOrCreate()
 
 
@@ -233,6 +301,7 @@ def create_torch_dataloader(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pull sanitized training data for the AWS auto-ML pipeline.")
+    parser.add_argument("--source-type", default=os.getenv("DATA_SOURCE_TYPE", "databricks_sql"), choices=("databricks_sql", "s3_csv"))
     parser.add_argument("--mode", default=os.getenv("DATA_PULL_MODE", "cloud"), choices=("cloud", "basic", "local"))
     parser.add_argument("--engine", default="spark", choices=("spark", "pandas"))
     parser.add_argument("--query-file", required=True, help="Path to a local SQL file. Keep SQL out of source control.")
@@ -242,17 +311,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--secret-name", default=os.getenv("DATA_PLATFORM_SECRET_NAME"))
     parser.add_argument("--region", default=os.getenv("AWS_REGION", "us-west-2"))
     parser.add_argument("--partition-column", action="append", default=[])
+    parser.add_argument("--s3-input-uri", default=os.getenv("S3_INPUT_URI"))
+    parser.add_argument("--csv-header", default=os.getenv("CSV_HEADER", "true"))
+    parser.add_argument("--csv-infer-schema", default=os.getenv("CSV_INFER_SCHEMA", "true"))
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     config = DataPullConfig(
+        source_type=args.source_type,
         mode=args.mode,
         catalog=args.catalog,
         schema=args.schema,
         secret_name=args.secret_name,
         region=args.region,
+        s3_input_uri=args.s3_input_uri,
+        csv_header=str(args.csv_header).lower() == "true",
+        csv_infer_schema=str(args.csv_infer_schema).lower() == "true",
     )
     stage = DataPullStage(config)
 

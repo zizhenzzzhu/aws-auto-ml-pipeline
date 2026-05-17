@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 
 PLACEHOLDER_PREFIXES = ("your-", "account-id", "bucket", "example", "replace-me")
@@ -21,6 +26,7 @@ REQUIRED_FIELDS = (
     "aws.s3_bucket",
     "airflow.dag_id",
     "data.query_file",
+    "data.source_type",
     "data.raw_uri",
     "data.etl_uri",
     "data.feature_uri",
@@ -91,6 +97,9 @@ def validate_config(config: dict[str, Any]) -> None:
     if placeholders:
         raise ValueError(f"Replace placeholder config fields before running: {', '.join(placeholders)}")
 
+    if airflow_provider(config) == "mwaa" and not nested_get(config, "airflow.mwaa_environment_name"):
+        raise ValueError("airflow.mwaa_environment_name is required when airflow.provider is mwaa.")
+
 
 def resolve_path(config_path: Path, raw_path: str) -> Path:
     candidate = Path(raw_path)
@@ -105,6 +114,19 @@ def validate_sql_file(config: dict[str, Any], config_path: Path) -> None:
         raise FileNotFoundError(f"SQL query file does not exist: {query_file}")
     if query_file.suffix.lower() != ".sql":
         raise ValueError(f"Query file must be a .sql file: {query_file}")
+    print("SQL file exists. Contents are ignored when data.source_type is s3_csv.")
+
+
+def validate_data_source(config: dict[str, Any]) -> None:
+    source_type = nested_get(config, "data.source_type")
+    if source_type == "s3_csv":
+        s3_input_uri = nested_get(config, "data.s3_input_uri")
+        if not s3_input_uri:
+            raise ValueError("data.s3_input_uri is required when data.source_type is s3_csv.")
+        if isinstance(s3_input_uri, str) and "your-" in s3_input_uri.lower():
+            raise ValueError("Replace placeholder data.s3_input_uri before running.")
+    if source_type not in {"s3_csv", "databricks_sql"}:
+        raise ValueError("data.source_type must be one of: s3_csv, databricks_sql.")
 
 
 def require_cli(name: str) -> None:
@@ -121,6 +143,15 @@ def run_command(command: list[str], dry_run: bool = False, input_text: str | Non
     return subprocess.run(command, input=input_text, text=True, check=True, capture_output=True)
 
 
+def airflow_provider(config: dict[str, Any]) -> str:
+    return str(nested_get(config, "airflow.provider") or "cli").strip().lower()
+
+
+def quote_airflow_arg(value: str) -> str:
+    escaped = value.replace("'", "'\"'\"'")
+    return f"'{escaped}'"
+
+
 def validate_s3_bucket(config: dict[str, Any], dry_run: bool) -> None:
     if not dry_run:
         require_cli("aws")
@@ -135,6 +166,36 @@ def ecr_image_uri(config: dict[str, Any]) -> str:
     repository = nested_get(config, "ecr.repository_name")
     tag = nested_get(config, "ecr.tag")
     return f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repository}:{tag}"
+
+
+def bool_config(config: dict[str, Any], dotted_path: str, default: bool = False) -> bool:
+    value = nested_get(config, dotted_path)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def sanitize_ecr_repository_name(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9._/-]+", "-", value.lower())
+    normalized = re.sub(r"[-._/]+", "-", normalized).strip("-._/")
+    return normalized or "automl-model"
+
+
+def resolve_ecr_repository_name(config: dict[str, Any]) -> str:
+    base_repository = nested_get(config, "ecr.repository_name")
+    if not bool_config(config, "ecr.create_new_repository_per_model", default=False):
+        return base_repository
+
+    pipeline_name = nested_get(config, "project.pipeline_name")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    repository_name = sanitize_ecr_repository_name(f"{base_repository}-{pipeline_name}-{timestamp}")
+    return repository_name[:256].rstrip("-._/")
+
+
+def set_ecr_repository_name(config: dict[str, Any], repository_name: str) -> None:
+    config.setdefault("ecr", {})["repository_name"] = repository_name
 
 
 def ecr_image_exists(config: dict[str, Any], dry_run: bool) -> bool:
@@ -217,6 +278,14 @@ def dag_conf(config: dict[str, Any], image_uri: str) -> dict[str, Any]:
     return {
         "repo_root": nested_get(config, "project.repo_root"),
         "query_file": nested_get(config, "data.query_file"),
+        "source_type": nested_get(config, "data.source_type"),
+        "s3_input_uri": nested_get(config, "data.s3_input_uri"),
+        "csv_header": str(nested_get(config, "data.csv_header") if nested_get(config, "data.csv_header") is not None else True).lower(),
+        "csv_infer_schema": str(
+            nested_get(config, "data.csv_infer_schema")
+            if nested_get(config, "data.csv_infer_schema") is not None
+            else True
+        ).lower(),
         "raw_uri": nested_get(config, "data.raw_uri"),
         "etl_uri": nested_get(config, "data.etl_uri"),
         "feature_uri": nested_get(config, "data.feature_uri"),
@@ -246,19 +315,66 @@ def write_dag_conf(conf: dict[str, Any], output_path: Path) -> None:
     print(f"Wrote Airflow DAG config: {output_path}")
 
 
+def invoke_mwaa_cli(config: dict[str, Any], command: str, dry_run: bool) -> None:
+    environment_name = nested_get(config, "airflow.mwaa_environment_name")
+    region = nested_get(config, "aws.region")
+
+    if dry_run:
+        print(f"[dry-run] aws mwaa create-cli-token --name {environment_name} --region {region}")
+        print(f"[dry-run] POST https://<MWAA WebServerHostname>/aws_mwaa/cli")
+        print(f"[dry-run] Airflow CLI command: {command}")
+        return
+
+    require_cli("aws")
+    token_result = run_command(["aws", "mwaa", "create-cli-token", "--name", environment_name, "--region", region])
+    token_payload = json.loads(token_result.stdout)
+    request = Request(
+        f"https://{token_payload['WebServerHostname']}/aws_mwaa/cli",
+        data=command.encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token_payload['CliToken']}",
+            "Content-Type": "text/plain",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=60) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"MWAA CLI request failed with HTTP {exc.code}: {body}") from exc
+
+    stdout = base64.b64decode(response_payload.get("stdout") or b"").decode("utf-8", errors="replace")
+    stderr = base64.b64decode(response_payload.get("stderr") or b"").decode("utf-8", errors="replace")
+    if stdout:
+        print(stdout.strip())
+    if stderr:
+        print(stderr.strip(), file=sys.stderr)
+        raise RuntimeError("MWAA Airflow CLI command failed.")
+
+
 def register_airflow(config: dict[str, Any], conf: dict[str, Any], dry_run: bool) -> None:
-    if not dry_run:
-        require_cli("airflow")
     variable_name = nested_get(config, "airflow.variable_name") or "automl_pipeline_config"
     payload = json.dumps(conf)
+    if airflow_provider(config) == "mwaa":
+        invoke_mwaa_cli(config, f"variables set {variable_name} {quote_airflow_arg(payload)}", dry_run)
+        return
+
+    if not dry_run:
+        require_cli("airflow")
     run_command(["airflow", "variables", "set", variable_name, payload], dry_run=dry_run)
 
 
 def trigger_airflow(config: dict[str, Any], conf: dict[str, Any], dry_run: bool) -> None:
-    if not dry_run:
-        require_cli("airflow")
     dag_id = nested_get(config, "airflow.dag_id")
     payload = json.dumps(conf)
+    if airflow_provider(config) == "mwaa":
+        invoke_mwaa_cli(config, f"dags trigger {dag_id} --conf {quote_airflow_arg(payload)}", dry_run)
+        return
+
+    if not dry_run:
+        require_cli("airflow")
     run_command(["airflow", "dags", "trigger", dag_id, "--conf", payload], dry_run=dry_run)
 
 
@@ -269,6 +385,7 @@ def main() -> None:
 
     print("1. Validate config")
     validate_config(config)
+    validate_data_source(config)
 
     print("2. Validate SQL file")
     validate_sql_file(config, config_path)
@@ -277,6 +394,11 @@ def main() -> None:
     validate_s3_bucket(config, args.dry_run)
 
     print("4. Validate ECR image")
+    repository_name = resolve_ecr_repository_name(config)
+    set_ecr_repository_name(config, repository_name)
+    if bool_config(config, "ecr.create_new_repository_per_model", default=False):
+        print(f"Using new ECR repository for this model run: {repository_name}")
+
     image_uri = nested_get(config, "ecr.image_uri") or ecr_image_uri(config)
     if not args.skip_ecr:
         image_uri = build_and_push_ecr(config, config_path, args.dry_run, args.force_build)

@@ -9,6 +9,7 @@ __pycache__/
 
 queries/*.sql
 !queries/.gitkeep
+!queries/training.sql
 
 data/
 outputs/

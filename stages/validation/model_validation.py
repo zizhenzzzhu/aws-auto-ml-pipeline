@@ -46,7 +46,7 @@ def load_model(model_dir: Path):
 
     metadata = json.loads((model_dir / "metadata.json").read_text(encoding="utf-8"))
     model = build_model(len(metadata["feature_columns"]), metadata["hidden_dim"])
-    model.load_state_dict(torch.load(model_dir / "model.pt", map_location="cpu"))
+    model.load_state_dict(torch.load(model_dir / "model.pt", map_location="cpu", weights_only=True))
     model.eval()
     return model, metadata
 

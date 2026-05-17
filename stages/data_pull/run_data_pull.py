@@ -21,6 +21,7 @@ LOGGER = logging.getLogger("stages.data_pull")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pull source data into Parquet for model development.")
+    parser.add_argument("--source-type", default=os.getenv("DATA_SOURCE_TYPE", "databricks_sql"), choices=("databricks_sql", "s3_csv"))
     parser.add_argument("--mode", default=os.getenv("DATA_PULL_MODE", "cloud"), choices=("cloud", "basic", "local"))
     parser.add_argument("--engine", default="spark", choices=("spark", "pandas"))
     parser.add_argument("--query-file", required=True)
@@ -30,6 +31,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--secret-name", default=os.getenv("DATA_PLATFORM_SECRET_NAME"))
     parser.add_argument("--region", default=os.getenv("AWS_REGION", "us-west-2"))
     parser.add_argument("--partition-column", action="append", default=[])
+    parser.add_argument("--s3-input-uri", default=os.getenv("S3_INPUT_URI"))
+    parser.add_argument("--csv-header", default=os.getenv("CSV_HEADER", "true"))
+    parser.add_argument("--csv-infer-schema", default=os.getenv("CSV_INFER_SCHEMA", "true"))
     return parser.parse_args()
 
 
@@ -37,11 +41,15 @@ def main() -> None:
     configure_logging()
     args = parse_args()
     config = DataPullConfig(
+        source_type=args.source_type,
         mode=args.mode,
         catalog=args.catalog,
         schema=args.schema,
         secret_name=args.secret_name,
         region=args.region,
+        s3_input_uri=args.s3_input_uri,
+        csv_header=str(args.csv_header).lower() == "true",
+        csv_infer_schema=str(args.csv_infer_schema).lower() == "true",
     )
     stage = DataPullStage(config)
 

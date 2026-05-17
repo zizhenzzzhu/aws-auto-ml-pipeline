@@ -14,6 +14,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run local pipeline stages in order.")
     parser.add_argument("--query-file", required=True)
+    parser.add_argument("--source-type", default="s3_csv", choices=("s3_csv", "databricks_sql"))
+    parser.add_argument("--s3-input-uri", default=None)
+    parser.add_argument("--csv-header", default="true")
+    parser.add_argument("--csv-infer-schema", default="true")
     parser.add_argument("--raw-uri", default="data/raw")
     parser.add_argument("--etl-uri", default="data/etl")
     parser.add_argument("--feature-uri", default="data/features")
@@ -36,6 +40,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-data-validation", action="store_true")
     parser.add_argument("--skip-feature-engineering", action="store_true")
     parser.add_argument("--skip-model-validation", action="store_true")
+    parser.add_argument("--data-pull-engine", default="spark", choices=("spark", "pandas"),
+                        help="Use 'pandas' to pull data without Spark (useful for local testing).")
+    parser.add_argument("--min-minority-ratio", type=float, default=None,
+                        help="Override the minimum minority class ratio for data validation (e.g. 0.0 to disable).")
     return parser.parse_args()
 
 
@@ -53,10 +61,19 @@ def main() -> None:
             [
                 sys.executable,
                 "stages/data_pull/run_data_pull.py",
+                "--source-type",
+                args.source_type,
+                "--engine",
+                args.data_pull_engine,
                 "--query-file",
                 args.query_file,
                 "--output-uri",
                 args.raw_uri,
+                "--csv-header",
+                args.csv_header,
+                "--csv-infer-schema",
+                args.csv_infer_schema,
+                *(["--s3-input-uri", args.s3_input_uri] if args.s3_input_uri else []),
             ]
         )
 
@@ -99,6 +116,8 @@ def main() -> None:
             "--non-null-column",
             args.label_column,
         ]
+        if args.min_minority_ratio is not None:
+            data_validation_command.extend(["--min-minority-ratio", str(args.min_minority_ratio)])
         if args.previous_run_uri:
             data_validation_command.extend(["--previous-run-uri", args.previous_run_uri])
         for column in args.drift_column:

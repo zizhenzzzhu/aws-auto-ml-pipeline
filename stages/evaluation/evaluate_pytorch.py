@@ -50,7 +50,7 @@ def main() -> None:
         )
 
         model = build_model(len(metadata["feature_columns"]), metadata["hidden_dim"])
-        model.load_state_dict(torch.load(model_dir / "model.pt", map_location="cpu"))
+        model.load_state_dict(torch.load(model_dir / "model.pt", map_location="cpu", weights_only=True))
         model.eval()
 
         loss_fn = torch.nn.BCEWithLogitsLoss() if metadata["task"] == "binary_classification" else torch.nn.MSELoss()

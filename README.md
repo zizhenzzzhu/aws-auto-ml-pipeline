@@ -63,12 +63,67 @@ bash ml.sh --force-build
 bash ml.sh --skip-trigger
 ```
 
+For a physical AWS trial without Databricks, set `data.source_type: s3_csv` and
+point `data.s3_input_uri` to a CSV object or prefix in S3. The SQL file still
+must exist for compatibility with the pipeline interface, but the SQL contents
+are ignored in `s3_csv` mode. A placeholder is included at
+`queries/training.sql`.
+
+The included `ml_config.yaml` is set up for an S3 CSV trial in `us-east-2`.
+If your S3 object key contains spaces, keep the URI quoted in YAML, for example:
+
+```yaml
+data:
+  s3_input_uri: "s3://sagemaker-us-east-2-597936860966/tiktok 3ds.csv"
+```
+
+To create a new ECR repository for every model run, keep:
+
+```yaml
+ecr:
+  create_new_repository_per_model: true
+```
+
+The launcher appends the pipeline name and UTC timestamp to `ecr.repository_name`
+before building and pushing the image.
+
+## Airflow
+
+The default config uses the Airflow CLI:
+
+```yaml
+airflow:
+  provider: cli
+  dag_id: improved_automl_pipeline
+```
+
+Place or mount this repository at the Airflow path configured by
+`project.repo_root`, which defaults to `/opt/airflow/repo`. The launcher
+uses `airflow variables set` and `airflow dags trigger` to register the runtime
+configuration and start the DAG.
+
+Dry-run the Airflow registration path without touching AWS resources:
+
+```powershell
+python .\scripts\bootstrap_ml_pipeline.py --dry-run --skip-trigger
+```
+
+For a real Airflow run, confirm the AWS CLI identity can access the S3 bucket
+and ECR, Docker is running, and the `airflow` CLI is available, then run:
+
+```powershell
+python .\scripts\bootstrap_ml_pipeline.py
+```
+
+Amazon MWAA remains supported by setting `airflow.provider: mwaa` and
+`airflow.mwaa_environment_name`, but it is not the default.
+
 ## Data Pull Stage
 
-Use `data-pull.py` with `mode=cloud` for AWS execution against Databricks SQL.
-Connection details are loaded from AWS Secrets Manager through
-`DATA_PLATFORM_SECRET_NAME`; local SQL files are ignored by git under
-`queries/*.sql`.
+Use `data-pull.py` with `--source-type s3_csv` for AWS testing from S3 CSV
+files, or `--source-type databricks_sql` for Databricks SQL. Databricks
+connection details are loaded from AWS Secrets Manager through
+`DATA_PLATFORM_SECRET_NAME`.
 
 Required environment variables:
 
@@ -110,16 +165,17 @@ python .\monitoring\cloudwatch\setup_monitoring.py --dry-run
 Run a Spark pull and write training-ready Parquet:
 
 ```powershell
-python .\data-pull.py --mode cloud --engine spark --query-file .\queries\training.sql --output-uri s3://bucket/prefix/training/
+python .\data-pull.py --source-type s3_csv --engine spark --query-file .\queries\training.sql --s3-input-uri s3://bucket/input/training.csv --output-uri s3://bucket/prefix/training/
 ```
 
+Spark S3 CSV pulls require the Spark runtime to have S3 access. Databricks SQL
 Spark pulls require the Databricks JDBC driver to be available to the Spark
-runtime. Pandas pulls use `databricks-sql-connector`.
+runtime.
 
 For small validation checks, use pandas:
 
 ```powershell
-python .\data-pull.py --mode cloud --engine pandas --query-file .\queries\training.sql
+python .\data-pull.py --source-type s3_csv --engine pandas --query-file .\queries\training.sql --s3-input-uri s3://bucket/input/training.csv
 ```
 
 PySpark handles extraction and large-scale preparation. PyTorch training should
@@ -142,7 +198,7 @@ dataloader = data_pull.create_torch_dataloader(
 Run the stage scripts directly:
 
 ```powershell
-python .\stages\data_pull\run_data_pull.py --query-file .\queries\training.sql --output-uri .\data\raw
+python .\stages\data_pull\run_data_pull.py --source-type s3_csv --query-file .\queries\training.sql --s3-input-uri s3://bucket/input/training.csv --output-uri .\data\raw
 python .\stages\validation\schema_validation_spark.py --input-uri .\data\raw --expected-column feature_1 --expected-column feature_2 --expected-column label --freshness-column event_date
 python .\stages\etl\etl_spark.py --input-uri .\data\raw --output-uri .\data\etl --drop-duplicate
 python .\stages\validation\data_validation_spark.py --input-uri .\data\etl --label-column label --mostly-non-null-check feature_1:0.95 --range-check age:0:120 --set-check category:A,B,C --previous-run-uri .\data\baseline --drift-column feature_1
@@ -157,7 +213,7 @@ python .\stages\validation\model_validation.py --test-uri .\data\processed --mod
 Or run the local orchestrator:
 
 ```powershell
-python .\orchestration\run_local_pipeline.py --query-file .\queries\training.sql --label-column label --previous-run-uri .\data\baseline --drift-column feature_1 --champion-auc 0.75
+python .\orchestration\run_local_pipeline.py --source-type s3_csv --query-file .\queries\training.sql --s3-input-uri s3://bucket/input/training.csv --label-column label --previous-run-uri .\data\baseline --drift-column feature_1 --champion-auc 0.75
 ```
 
 Feature engineering follows this automatic flow:
@@ -189,7 +245,8 @@ python .\stages\deployment\register_model.py --model-package-group your-model-gr
 
 ```text
 pull_data -> validate_schema -> etl -> validate_data -> feature_engineer
--> feature_select -> preprocess -> train_model -> validate_model -> register_model
+-> feature_select -> preprocess -> train_model -> evaluate_model
+-> validate_model -> package_model -> register_model
 ```
 
 The DAG task name is `train_model` because the current implementation trains a
